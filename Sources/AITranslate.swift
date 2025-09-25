@@ -26,7 +26,6 @@ struct AITranslate: AsyncParsableCommand {
       .map { String($0).trimmingCharacters(in: .whitespaces) }
   }
   
-  // 从 .env 文件读取环境变量
   static func loadEnvFile() -> [String: String] {
     let envPath = FileManager.default.currentDirectoryPath + "/.env"
     let envURL = URL(fileURLWithPath: envPath)
@@ -40,24 +39,18 @@ struct AITranslate: AsyncParsableCommand {
     
     for line in lines {
       let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-      
-      // 跳过空行和注释行
       if trimmedLine.isEmpty || trimmedLine.hasPrefix("#") {
         continue
       }
-      
-      // 分割键值对
       let components = trimmedLine.components(separatedBy: "=")
       if components.count >= 2 {
         let key = components[0].trimmingCharacters(in: .whitespacesAndNewlines)
         let value = components.dropFirst().joined(separator: "=")
           .trimmingCharacters(in: .whitespacesAndNewlines)
-          .trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) // 移除引号
-        
+          .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
         envVars[key] = value
       }
     }
-    
     return envVars
   }
 
@@ -66,7 +59,7 @@ struct AITranslate: AsyncParsableCommand {
 
   @Option(
     name: .shortAndLong,
-    help: ArgumentHelp("A comma separated list of language codes (must match the language codes used by xcstrings)"), 
+    help: ArgumentHelp("A comma separated list of language codes (must match the language codes used by xcstrings)"),
     transform: AITranslate.gatherLanguages(from:)
   )
   var languages: [String] = []
@@ -85,7 +78,7 @@ struct AITranslate: AsyncParsableCommand {
 
   @Option(
     name: .shortAndLong,
-    help: ArgumentHelp("Your Model, see: https://platform.openai.com/docs/models, e,g (gpt-3.5-turbo, gpt-4o-mini, gpt-4o)")
+    help: ArgumentHelp("Your Model, see: https://platform.openai.com/docs/models")
   )
   var model: String = ""
 
@@ -104,7 +97,6 @@ struct AITranslate: AsyncParsableCommand {
   )
   var force: Bool = false
 
-  // 处理参数优先级的属性
   private var resolvedLanguages: [String] = []
   private var resolvedOpenAIKey: String = ""
   private var resolvedOpenAIHost: String = ""
@@ -117,30 +109,24 @@ struct AITranslate: AsyncParsableCommand {
       host: resolvedOpenAIHost,
       timeoutInterval: 60.0
     )
-
     return OpenAI(configuration: configuration)
   }()
 
-  var numberOfTranslationsProcessed = 0
-
   mutating func run() async throws {
-    // 加载 .env 文件
     let envVars = Self.loadEnvFile()
     
-    // 解析参数优先级：命令行 > .env
-    resolvedLanguages = languages.isEmpty ? 
+    resolvedLanguages = languages.isEmpty ?
       Self.gatherLanguages(from: envVars["LANGUAGES"] ?? "") : languages
     
-    resolvedOpenAIKey = openAIKey.isEmpty ? 
+    resolvedOpenAIKey = openAIKey.isEmpty ?
       (envVars["OPENAI_API_KEY"] ?? "") : openAIKey
     
-    resolvedOpenAIHost = openAIHost.isEmpty ? 
+    resolvedOpenAIHost = openAIHost.isEmpty ?
       (envVars["OPENAI_HOST"] ?? "api.openai.com") : openAIHost
     
-    resolvedModel = model.isEmpty ? 
+    resolvedModel = model.isEmpty ?
       (envVars["MODEL"] ?? "gpt-4o-mini") : model
     
-    // 验证必要参数
     guard !resolvedLanguages.isEmpty else {
       throw ValidationError("Languages must be specified either via command line (-l) or .env file (LANGUAGES)")
     }
@@ -155,103 +141,96 @@ struct AITranslate: AsyncParsableCommand {
       print("[🌐] Using host: \(resolvedOpenAIHost)")
     }
 
-    do {
-      let dict = try JSONDecoder().decode(
-        StringsDict.self,
-        from: try Data(contentsOf: inputFile)
-      )
+    let dict = try JSONDecoder().decode(
+      StringsDict.self,
+      from: try Data(contentsOf: inputFile)
+    )
 
-      let totalNumberOfTranslations = dict.strings.count * resolvedLanguages.count
-      let start = Date()
-      var previousPercentage: Int = -1
+    let totalLanguages = resolvedLanguages.count
+    var processedLanguages = 0
+    let start = Date()
 
+    for lang in resolvedLanguages {
+      try await processLanguage(lang, dict: dict, sourceLanguage: dict.sourceLanguage)
+
+      processedLanguages += 1
+      try save(dict) // 保存当前语言的翻译结果
+
+      let percentage = Int((Double(processedLanguages) / Double(totalLanguages)) * 100)
+      print("[⏳] 已完成 \(processedLanguages)/\(totalLanguages) 个语言 (\(percentage)%)")
+    }
+
+    let formatter = DateComponentsFormatter()
+    formatter.allowedUnits = [.hour, .minute, .second]
+    formatter.unitsStyle = .full
+    let formattedString = formatter.string(from: Date().timeIntervalSince(start))!
+    print("[✅] 所有语言翻译完成 \n[⏰] 总耗时: \(formattedString)")
+  }
+
+  mutating func processLanguage(_ lang: String, dict: StringsDict, sourceLanguage: String) async throws {
+    let semaphore = DispatchSemaphore(value: 5)
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
       for entry in dict.strings {
-        try await processEntry(
-          key: entry.key,
-          localizationGroup: entry.value,
-          sourceLanguage: dict.sourceLanguage
-        )
-
-        let fractionProcessed = (Double(numberOfTranslationsProcessed) / Double(totalNumberOfTranslations))
-        let percentageProcessed = Int(fractionProcessed * 100)
-
-        // Print the progress at 10% intervals.
-        if percentageProcessed != previousPercentage, percentageProcessed % 10 == 0 {
-          print("[⏳] \(percentageProcessed)%")
-          previousPercentage = percentageProcessed
+        group.addTask {
+          semaphore.wait()
+          defer { semaphore.signal() }
+          try await self.processEntry(
+            key: entry.key,
+            localizationGroup: entry.value,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: lang
+          )
         }
-
-        numberOfTranslationsProcessed += resolvedLanguages.count
       }
-
-      try save(dict)
-
-      let formatter = DateComponentsFormatter()
-      formatter.allowedUnits = [.hour, .minute, .second]
-      formatter.unitsStyle = .full
-      let formattedString = formatter.string(from: Date().timeIntervalSince(start))!
-
-      print("[✅] 100% \n[⏰] Translations time: \(formattedString)")
-    } catch let error {
-      throw error
+      try await group.waitForAll()
     }
   }
 
   mutating func processEntry(
     key: String,
     localizationGroup: LocalizationGroup,
-    sourceLanguage: String
+    sourceLanguage: String,
+    targetLanguage: String
   ) async throws {
-    for lang in resolvedLanguages {
-      let localizationEntries = localizationGroup.localizations ?? [:]
-      let unit = localizationEntries[lang]
+    let localizationEntries = localizationGroup.localizations ?? [:]
+    let unit = localizationEntries[targetLanguage]
 
-      // Nothing to do.
-      if let unit, unit.hasTranslation, force == false {
-        continue
-      }
-
-      // Skip the ones with variations/substitutions since they are not supported.
-      if let unit, unit.isSupportedFormat == false {
-        print("[⚠️] Unsupported format in entry with key: \(key)")
-        continue
-      }
-
-      // The source text can either be the key or an explicit value in the `localizations`
-      // dictionary keyed by `sourceLanguage`.
-      let sourceText = localizationEntries[sourceLanguage]?.stringUnit?.value ?? key
-
-      let result: String?
-      if (localizationGroup.shouldTranslate != false){
-        result = try await performTranslation(
-          sourceText,
-          from: sourceLanguage,
-          to: lang,
-          context: localizationGroup.comment,
-          openAI: openAI
-        )
-      } else {
-        result = key
-        if verbose {
-          print("[\(lang)] " + key + " -> skip")
-        }
-      }
-
-      localizationGroup.localizations = localizationEntries
-      localizationGroup.localizations?[lang] = LocalizationUnit(
-        stringUnit: StringUnit(
-          state: result == nil ? "error" : "translated",
-          value: result ?? ""
-        )
-      )
+    if let unit, unit.hasTranslation, force == false { return }
+    if let unit, unit.isSupportedFormat == false {
+      print("[⚠️] Unsupported format in entry with key: \(key)")
+      return
     }
+
+    let sourceText = localizationEntries[sourceLanguage]?.stringUnit?.value ?? key
+    let result: String?
+    if localizationGroup.shouldTranslate != false {
+      result = try await performTranslation(
+        sourceText,
+        from: sourceLanguage,
+        to: targetLanguage,
+        context: localizationGroup.comment,
+        openAI: openAI
+      )
+    } else {
+      result = key
+      if verbose { print("[\(targetLanguage)] \(key) -> skip") }
+    }
+
+    var newEntries = localizationEntries
+    newEntries[targetLanguage] = LocalizationUnit(
+      stringUnit: StringUnit(
+        state: result == nil ? "error" : "translated",
+        value: result ?? ""
+      )
+    )
+    localizationGroup.localizations = newEntries
   }
 
   func save(_ dict: StringsDict) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
     let data = try encoder.encode(dict)
-
     try backupInputFileIfNecessary()
     try data.write(to: inputFile)
   }
@@ -259,16 +238,8 @@ struct AITranslate: AsyncParsableCommand {
   func backupInputFileIfNecessary() throws {
     if skipBackup == false {
       let backupFileURL = inputFile.appendingPathExtension("original")
-
-      try? FileManager.default.trashItem(
-        at: backupFileURL,
-        resultingItemURL: nil
-      )
-
-      try FileManager.default.moveItem(
-        at: inputFile,
-        to: backupFileURL
-      )
+      try? FileManager.default.trashItem(at: backupFileURL, resultingItemURL: nil)
+      try FileManager.default.moveItem(at: inputFile, to: backupFileURL)
     }
   }
 
@@ -279,8 +250,6 @@ struct AITranslate: AsyncParsableCommand {
     context: String? = nil,
     openAI: OpenAI
   ) async throws -> String? {
-
-    // Skip text that is generally not translated.
     if text.isEmpty ||
         text.trimmingCharacters(
           in: .whitespacesAndNewlines
@@ -293,10 +262,7 @@ struct AITranslate: AsyncParsableCommand {
     var translationRequest = "<source>\(source)</source>"
     translationRequest += "<target>\(target)</target>"
     translationRequest += "<original>\(text)</original>"
-
-    if let context {
-      translationRequest += "<context>\(context)</context>"
-    }
+    if let context { translationRequest += "<context>\(context)</context>" }
 
     let query = ChatQuery(
       messages: [
@@ -309,19 +275,13 @@ struct AITranslate: AsyncParsableCommand {
     do {
       let result = try await openAI.chats(query: query)
       let translation = result.choices.first?.message.content?.string ?? text
-
       if verbose {
-        print("[\(target)] " + text + " -> " + translation)
+        print("[\(target)] \(text) -> \(translation)")
       }
-
       return translation
-    } catch let error {
+    } catch {
       print("[❌] Failed to translate \(text) into \(target)")
-
-      if verbose {
-        print("[💥]" + error.localizedDescription)
-      }
-
+      if verbose { print("[💥] " + error.localizedDescription) }
       return nil
     }
   }
