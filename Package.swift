@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "AITranslate",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v14), .iOS(.v13)],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/MacPaw/OpenAI.git", branch: "main")
