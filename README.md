@@ -36,7 +36,7 @@ Run the following script to install or update:
 curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash
 
 # Uninstall
-curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash install.sh uninstall
+curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash -s uninstall
 ````
 
 ---

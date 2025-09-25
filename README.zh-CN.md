@@ -34,7 +34,7 @@ AI Translate 是一个轻量级命令行工具，用于解析 Xcode `.xcstrings`
 curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash
 
 # 卸载
-curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash install.sh uninstall
+curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash -s uninstall
 ````
 
 ---
