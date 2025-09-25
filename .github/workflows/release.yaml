@@ -24,7 +24,7 @@ jobs:
       - name: Generate version by timestamp
         id: vars
         run: |
-          VERSION="v$(date +'%Y%m%d-%H%M%S')"
+          VERSION="$(date +'%y%m%d')-$(git rev-parse --short=3 HEAD)"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       
       - name: Sync version to AITranslate.swift
@@ -40,7 +40,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.vars.outputs.version }}
-          name: "Release ${{ steps.vars.outputs.version }}"
+          name: "v${{ steps.vars.outputs.version }}"
           draft: false
           prerelease: false
           files: |
