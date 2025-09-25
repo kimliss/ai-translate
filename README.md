@@ -33,10 +33,10 @@ Run the following script to install or update:
 
 ```bash
 # Install or update
-curl -fsSL https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash
 
 # Uninstall
-curl -fsSL https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads/main/install.sh | bash install.sh uninstall
+curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash install.sh uninstall
 ````
 
 ---
@@ -50,7 +50,7 @@ From the repo root directory:
 ai-translate /path/to/Localizable.xcstrings -o <your-openai-API-key> -v -l de,es,fr,he,it,ru,hi,en-GB
 
 # With environment variables
-curl -o .env https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads/main/.env.example
+curl -o .env https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/.env.example
 echo ".env" >> .gitignore
 ai-translate /path/to/Localizable.xcstrings
 ```

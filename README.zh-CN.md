@@ -31,10 +31,10 @@ AI Translate 是一个轻量级命令行工具，用于解析 Xcode `.xcstrings`
 
 ```bash
 # 安装或更新
-curl -fsSL https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash
 
 # 卸载
-curl -fsSL https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads/main/install.sh | bash install.sh uninstall
+curl -fsSL https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/install.sh | bash install.sh uninstall
 ````
 
 ---
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads
 ai-translate /path/to/Localizable.xcstrings -o <your-openai-API-key> -v -l de,es,fr,he,it,ru,hi,en-GB
 
 # 使用环境变量配置
-curl -o .env https://raw.githubusercontent.com/testoss/fork-AITranslate/refs/heads/main/.env.example
+curl -o .env https://raw.githubusercontent.com/kimliss/ai-translate/refs/heads/main/.env.example
 echo ".env" >> .gitignore
 ai-translate /path/to/Localizable.xcstrings
 ```
