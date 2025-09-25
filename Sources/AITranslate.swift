@@ -12,7 +12,6 @@ import Foundation
 @main
 struct AITranslate: AsyncParsableCommand {
     
-  // 命令名称和概述会在帮助信息中显示
   static let configuration = CommandConfiguration(
       abstract: "A command line tool that performs translation of xcstrings",
       usage: """
@@ -69,6 +68,12 @@ struct AITranslate: AsyncParsableCommand {
   )
   var model: String = ""
 
+  @Option(
+    name: .shortAndLong,
+    help: ArgumentHelp("Max number of concurrent translation tasks (default: 5)")
+  )
+  var concurrency: Int = 5
+
   @Flag(name: .shortAndLong)
   var verbose: Bool = false
 
@@ -108,11 +113,12 @@ struct AITranslate: AsyncParsableCommand {
     openAIKey = config.openAIKey
     openAIHost = config.openAIHost
     model = config.model
-    
+
     if verbose {
       print("[📁] Using languages: \(languages.joined(separator: ", "))")
       print("[🤖] Using model: \(model)")
       print("[🌐] Using host: \(openAIHost)")
+      print("[⚙️] concurrency: \(concurrency)")
     }
 
     do {
@@ -121,28 +127,65 @@ struct AITranslate: AsyncParsableCommand {
         from: try Data(contentsOf: inputFile)
       )
 
+      let entries = Array(dict.strings)
       let totalNumberOfTranslations = dict.strings.count * languages.count
       let start = Date()
       var previousPercentage: Int = -1
 
-      for entry in dict.strings {
-        try await processEntry(
-          key: entry.key,
-          localizationGroup: entry.value,
-          sourceLanguage: dict.sourceLanguage
-        )
+      let languagesLocal = languages
+      let modelLocal = model
+      let openAIClient = openAI
+      let verboseLocal = verbose
+      let forceLocal = force
+      let sourceLanguageLocal = dict.sourceLanguage
 
-        let fractionProcessed = (Double(numberOfTranslationsProcessed) / Double(totalNumberOfTranslations))
-        let percentageProcessed = Int(fractionProcessed * 100)
+      var numberProcessedLocal = numberOfTranslationsProcessed
 
-        // Print the progress at 10% intervals.
-        if percentageProcessed != previousPercentage, percentageProcessed % 10 == 0 {
-          print("[⏳] \(percentageProcessed)%")
-          previousPercentage = percentageProcessed
+      let batchSize = max(1, concurrency)
+      var currentIndex = 0
+      while currentIndex < entries.count {
+        let endIndex = min(currentIndex + batchSize, entries.count)
+        let batch = entries[currentIndex..<endIndex]
+
+        await withTaskGroup(of: (String, LocalizationGroup).self) { group in
+          for entry in batch {
+            let key = entry.key
+            let localizationGroup = entry.value
+
+            group.addTask {
+              let updated = await Self.processEntry(
+                key: key,
+                localizationGroup: localizationGroup,
+                sourceLanguage: sourceLanguageLocal,
+                languages: languagesLocal,
+                model: modelLocal,
+                openAI: openAIClient,
+                force: forceLocal,
+                verbose: verboseLocal
+              )
+              return (key, updated)
+            }
+          }
+
+          for await (key, updatedGroup) in group {
+            dict.strings[key] = updatedGroup
+
+            numberProcessedLocal += languagesLocal.count
+
+            let fractionProcessed = Double(numberProcessedLocal) / Double(totalNumberOfTranslations)
+            let percentageProcessed = Int(fractionProcessed * 100)
+
+            if percentageProcessed != previousPercentage, percentageProcessed % 10 == 0 {
+              print("[⏳] \(percentageProcessed)%")
+              previousPercentage = percentageProcessed
+            }
+          }
         }
 
-        numberOfTranslationsProcessed += languages.count
+        currentIndex = endIndex
       }
+
+      numberOfTranslationsProcessed = numberProcessedLocal
 
       try save(dict)
 
@@ -157,38 +200,45 @@ struct AITranslate: AsyncParsableCommand {
     }
   }
 
-  mutating func processEntry(
+  static func processEntry(
     key: String,
     localizationGroup: LocalizationGroup,
-    sourceLanguage: String
-  ) async throws {
+    sourceLanguage: String,
+    languages: [String],
+    model: String,
+    openAI: OpenAI,
+    force: Bool,
+    verbose: Bool
+  ) async -> LocalizationGroup {
+    let localizationGroup = localizationGroup
+    var localizationEntries = localizationGroup.localizations ?? [:]
+
     for lang in languages {
-      let localizationEntries = localizationGroup.localizations ?? [:]
       let unit = localizationEntries[lang]
 
-      // Nothing to do.
       if let unit, unit.hasTranslation, force == false {
         continue
       }
 
-      // Skip the ones with variations/substitutions since they are not supported.
       if let unit, unit.isSupportedFormat == false {
-        print("[⚠️] Unsupported format in entry with key: \(key)")
+        if verbose {
+          print("[⚠️] Unsupported format in entry with key: \(key) for lang: \(lang)")
+        }
         continue
       }
 
-      // The source text can either be the key or an explicit value in the `localizations`
-      // dictionary keyed by `sourceLanguage`.
       let sourceText = localizationEntries[sourceLanguage]?.stringUnit?.value ?? key
 
       let result: String?
-      if (localizationGroup.shouldTranslate != false){
-        result = try await performTranslation(
+      if (localizationGroup.shouldTranslate != false) {
+        result = await Self.performTranslation(
           sourceText,
           from: sourceLanguage,
           to: lang,
           context: localizationGroup.comment,
-          openAI: openAI
+          model: model,
+          openAI: openAI,
+          verbose: verbose
         )
       } else {
         result = key
@@ -197,14 +247,16 @@ struct AITranslate: AsyncParsableCommand {
         }
       }
 
-      localizationGroup.localizations = localizationEntries
-      localizationGroup.localizations?[lang] = LocalizationUnit(
+      localizationEntries[lang] = LocalizationUnit(
         stringUnit: StringUnit(
           state: result == nil ? "error" : "translated",
           value: result ?? ""
         )
       )
     }
+
+    localizationGroup.localizations = localizationEntries
+    return localizationGroup
   }
 
   func save(_ dict: StringsDict) throws {
@@ -232,57 +284,55 @@ struct AITranslate: AsyncParsableCommand {
     }
   }
 
-  func performTranslation(
-    _ text: String,
-    from source: String,
-    to target: String,
-    context: String? = nil,
-    openAI: OpenAI
-  ) async throws -> String? {
-
-    // Skip text that is generally not translated.
-    if text.isEmpty ||
-        text.trimmingCharacters(
-          in: .whitespacesAndNewlines
-            .union(.symbols)
-            .union(.controlCharacters)
-        ).isEmpty {
-      return text
-    }
-
-    var translationRequest = "<source>\(source)</source>"
-    translationRequest += "<target>\(target)</target>"
-    translationRequest += "<original>\(text)</original>"
-
-    if let context {
-      translationRequest += "<context>\(context)</context>"
-    }
-
-    let query = ChatQuery(
-      messages: [
-        .init(role: .system, content: Self.systemPrompt)!,
-        .init(role: .user, content: translationRequest)!
-      ],
-      model: model
-    )
-
-    do {
-      let result = try await openAI.chats(query: query)
-      let translation = result.choices.first?.message.content?.string ?? text
-
-      if verbose {
-        print("[\(target)] " + text + " -> " + translation)
+  static func performTranslation(
+      _ text: String,
+      from source: String,
+      to target: String,
+      context: String? = nil,
+      model: String,
+      openAI: OpenAI,
+      verbose: Bool
+    ) async -> String? {
+      if text.isEmpty ||
+          text.trimmingCharacters(
+            in: .whitespacesAndNewlines
+              .union(.symbols)
+              .union(.controlCharacters)
+          ).isEmpty {
+        return text
       }
 
-      return translation
-    } catch let error {
-      print("[❌] Failed to translate \(text) into \(target)")
+      var translationRequest = "<source>\(source)</source>"
+      translationRequest += "<target>\(target)</target>"
+      translationRequest += "<original>\(text)</original>"
 
-      if verbose {
-        print("[💥]" + error.localizedDescription)
+      if let context {
+        translationRequest += "<context>\(context)</context>"
       }
 
-      return nil
+      let query = ChatQuery(
+        messages: [
+          .init(role: .system, content: Self.systemPrompt)!,
+          .init(role: .user, content: translationRequest)!
+        ],
+        model: model
+      )
+
+      do {
+        let result = try await openAI.chats(query: query)
+        let translation = result.choices.first?.message.content?.string ?? text
+
+        if verbose {
+          print("[\(target)] " + text + " -> " + translation)
+        }
+
+        return translation
+      } catch {
+        print("[❌] Failed to translate \(text) into \(target)")
+        if verbose {
+          print("[💥] " + error.localizedDescription)
+        }
+        return nil
+      }
     }
   }
-}
