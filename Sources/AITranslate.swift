@@ -15,8 +15,10 @@ struct AITranslate: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
       abstract: "A command line tool that performs translation of xcstrings",
       usage: """
+      ai-translate <input-file> [--languages <languages>] [--open-ai-key <open-ai-key>] [--host <host>] [--model <model>] [--verbose] [--concurrency] [--skip-backup] [--force]
       ai-translate /path/to/your/Localizable.xcstrings
       ai-translate /path/to/your/Localizable.xcstrings -v -f
+      ai-translate /path/to/your/Localizable.xcstrings -v -c 3
       """,
       discussion: """
       VERSION: 1.0.0
